@@ -1,0 +1,338 @@
+
+
+```{r}
+# Core libraries
+library(tidyverse)
+library(janitor)
+library(lubridate)
+
+# Modeling libraries
+library(tidymodels)
+
+# Set seed for reproducibility
+set.seed(123)
+```
+
+```{r}
+# Import data (update filename as needed)
+qal_raw <- read_csv("Mastercontrol QAL Performance.csv")
+
+qal <- qal_raw |>
+  clean_names()
+
+glimpse(qal)
+```
+
+# Target construction
+
+```{r}
+qal <- qal |>
+  mutate(
+    progressed = case_when(
+      next_stage_c %in% c("SQL", "SQO", "Won") ~ 1,
+      next_stage_c %in% c("Recycled", "Lost", "MQL", "INQ") ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+qal_model <- qal |>
+  filter(!next_stage_c %in% c("Exclude")) |>
+  filter(!is.na(progressed)) |>
+  mutate(
+    progressed = factor(progressed, levels = c(0, 1), labels = c("no", "yes"))
+  )
+
+qal_model |>
+  count(progressed) |>
+  mutate(pct = n / sum(n))
+```
+
+#Title feature engineering
+
+```{r}
+qal_model <- qal_model |>
+  mutate(
+    title_lower = tolower(contact_lead_title),
+    seniority = case_when(
+      str_detect(title_lower, "chief|ceo|cfo|coo|cio|cto") ~ "C-Level",
+      str_detect(title_lower, "vp|vice") ~ "VP",
+      str_detect(title_lower, "director") ~ "Director",
+      str_detect(title_lower, "manager") ~ "Manager",
+      is.na(title_lower) ~ "Missing",
+      TRUE ~ "Other"
+    ),
+    has_quality = str_detect(title_lower, "quality"),
+    has_ops     = str_detect(title_lower, "operat|manufactur|engineer"),
+    has_reg     = str_detect(title_lower, "regulat")
+  )
+```
+
+# Train/test split + resampling
+
+```{r}
+# Stratified split on progressed
+set.seed(123)
+qal_split <- initial_split(qal_model, prop = 0.8, strata = progressed)
+
+qal_train <- training(qal_split)
+qal_test  <- testing(qal_split)
+
+# 5- or 10-fold CV, stratified
+set.seed(123)
+qal_folds <- vfold_cv(qal_train, v = 5, strata = progressed)
+```
+
+# 3.5 Recipe (missingness as informative, dummy encoding)
+Adjust predictors as needed—this is a good starting point.
+
+```{r}
+qal_recipe <- recipe(progressed ~ acct_primary_site_function +
+                       acct_manufacturing_model +
+                       acct_target_industry +
+                       acct_territory_rollup +
+                       acct_tier_rollup +
+                       solution_rollup +
+                       seniority +
+                       has_quality + has_ops + has_reg +
+                       last_tactic_campaign_channel,
+                     data = qal_train) |>
+
+  # Convert logicals to factors BEFORE handling missingness
+  step_mutate(
+    has_quality = factor(has_quality, levels = c(FALSE, TRUE)),
+    has_ops     = factor(has_ops, levels = c(FALSE, TRUE)),
+    has_reg     = factor(has_reg, levels = c(FALSE, TRUE))
+  ) |>
+
+  # FIRST: catch unseen levels during CV
+  step_novel(all_nominal_predictors()) |>
+
+  # SECOND: convert NA to "unknown"
+  step_unknown(all_nominal_predictors()) |>
+
+  # One-hot encode AFTER novel/unknown handling
+  step_dummy(all_nominal_predictors()) |>
+
+  # Remove zero-variance predictors
+  step_zv(all_predictors()) |>
+
+  # Impute any remaining NA values
+  step_impute_median(all_numeric_predictors()) |>
+  step_impute_mode(all_nominal_predictors())
+```
+
+# 4 Models: specs + tuning patterns
+
+## 4.1 Logistic regression (baseline, no penalty)
+
+```{r}
+log_reg_spec <- logistic_reg(mode = "classification") |>
+  set_engine("glm")
+
+log_reg_wf <- workflow() |>
+  add_model(log_reg_spec) |>
+  add_recipe(qal_recipe)
+
+set.seed(123)
+log_reg_res <- fit_resamples(
+  log_reg_wf,
+  resamples = qal_folds,
+  metrics = metric_set(roc_auc, pr_auc, accuracy, sens, spec),
+  control = control_resamples(save_pred = TRUE)
+)
+
+collect_metrics(log_reg_res)
+```
+
+The model shows strong sensitivity and PR AUC but low specificity, indicating it captures positives well while misclassifying many negatives.
+
+#4.2 LASSO
+
+```{r}
+lasso_spec <- logistic_reg(
+  mode = "classification",
+  penalty = tune(),
+  mixture = 1  # 1 = pure LASSO; you can also tune mixture for elastic net
+) |>
+  set_engine("glmnet")
+
+lasso_wf <- workflow() |>
+  add_model(lasso_spec) |>
+  add_recipe(qal_recipe)
+
+lasso_grid <- grid_regular(
+  penalty(range = c(-4, 0)), # 10^-4 to 1
+  levels = 20
+)
+
+set.seed(123)
+lasso_res <- tune_grid(
+  lasso_wf,
+  resamples = qal_folds,
+  grid = lasso_grid,
+  metrics = metric_set(roc_auc, pr_auc, accuracy)
+)
+
+lasso_best <- select_best(lasso_res, metric = "roc_auc")
+lasso_best
+
+lasso_final_wf <- finalize_workflow(lasso_wf, lasso_best)
+```
+This is a small penalty meaning light regularization. In other words, many predictors still contribute and only the weakest coefficients are shrunk to zero. 
+
+#4.3 Decision Tree
+
+```{r}
+tree_spec <- decision_tree(
+  mode = "classification",
+  cost_complexity = tune(),
+  tree_depth      = tune(),
+  min_n           = tune()
+) |>
+  set_engine("rpart")
+
+tree_wf <- workflow() |>
+  add_model(tree_spec) |>
+  add_recipe(qal_recipe)
+
+tree_grid <- grid_regular(
+  cost_complexity(),
+  tree_depth(),
+  min_n(),
+  levels = 4
+)
+
+set.seed(123)
+tree_res <- tune_grid(
+  tree_wf,
+  resamples = qal_folds,
+  grid = tree_grid,
+  metrics = metric_set(roc_auc, pr_auc, accuracy)
+)
+
+tree_best <- select_best(tree_res, metric = "roc_auc")
+tree_best
+
+tree_final_wf <- finalize_workflow(tree_wf, tree_best)
+```
+This tuning selects an almost unpruned tree with deep splits, but the larger min_n keeps it from overfitting on tiny nodes.
+
+#4.4 Random Forest
+
+```{r}
+rf_spec <- rand_forest(
+  mode = "classification",
+  mtry  = tune(),
+  trees = 100,
+  min_n = tune()
+) |>
+  set_engine("ranger", importance = "impurity")
+
+rf_wf <- workflow() |>
+  add_model(rf_spec) |>
+  add_recipe(qal_recipe)
+
+rf_grid <- grid_regular(
+  mtry(range = c(5, 25)),
+  min_n(),
+  levels = 5
+)
+
+set.seed(123)
+rf_res <- tune_grid(
+  rf_wf,
+  resamples = qal_folds,
+  grid = rf_grid,
+  metrics = metric_set(roc_auc, pr_auc, accuracy)
+)
+
+rf_best <- select_best(rf_res, metric = "roc_auc")
+rf_best
+
+rf_final_wf <- finalize_workflow(rf_wf, rf_best)
+```
+
+Each tree considers a reasonable number of predictors but avoids very small terminal nodes, keeping the forest stable.
+
+# 4.5 Gradient Boosting
+
+```{r}
+xgb_spec <- boost_tree(
+  mode = "classification",
+  trees = 100,
+  learn_rate = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  loss_reduction = tune(),
+  sample_size = tune(),
+  mtry = tune()
+) |>
+  set_engine("xgboost")
+
+xgb_wf <- workflow() |>
+  add_model(xgb_spec) |>
+  add_recipe(qal_recipe)
+
+xgb_grid <- grid_latin_hypercube(
+  learn_rate(),
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  mtry(range = c(5, 25)),
+  size = 10
+)
+
+set.seed(123)
+xgb_res <- tune_grid(
+  xgb_wf,
+  resamples = qal_folds,
+  grid = xgb_grid,
+  metrics = metric_set(roc_auc, pr_auc, accuracy)
+)
+
+xgb_best <- select_best(xgb_res, metric = "roc_auc")
+xgb_best
+
+xgb_final_wf <- finalize_workflow(xgb_wf, xgb_best)
+```
+
+# 5 Model comparison
+
+```{r}
+log_reg_metrics  <- collect_metrics(log_reg_res)  |> mutate(model = "log_reg")
+lasso_metrics    <- collect_metrics(lasso_res)    |> mutate(model = "lasso")
+tree_metrics     <- collect_metrics(tree_res)     |> mutate(model = "tree")
+rf_metrics       <- collect_metrics(rf_res)       |> mutate(model = "rf")
+xgb_metrics      <- collect_metrics(xgb_res)      |> mutate(model = "xgb")
+
+all_metrics <- bind_rows(
+  log_reg_metrics,
+  lasso_metrics,
+  tree_metrics,
+  rf_metrics,
+  xgb_metrics
+)
+
+all_metrics |>
+  filter(.metric %in% c("roc_auc", "pr_auc", "accuracy")) |>
+  arrange(.metric, desc(mean))
+```
+
+Across all tuned models, LASSO emerges as the most reliable performer, consistently producing the highest accuracy regardless of penalty value. This suggests that a sparse linear model captures the underlying structure of the data better than more complex tree‑based or ensemble methods.
+
+# Final fit /  test performance
+
+```{r}
+final_fit <- last_fit(
+  lasso_final_wf,
+  split = qal_split,
+  metrics = metric_set(roc_auc, pr_auc, accuracy, sens, spec)
+)
+
+collect_metrics(final_fit)
+
+final_preds <- collect_predictions(final_fit)
+```
+
+The final LASSO model performs about the same on the test set as it did during cross‑validation. It stays very strong on sensitivity and overall accuracy, with the same low‑specificity trade‑off, so its behavior is consistent and not overfit.

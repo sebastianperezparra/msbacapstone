@@ -1,0 +1,330 @@
+---
+title: "MasterControl QAL Performance — Exploratory Data Analysis"
+author: "Group 4"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+# Introduction
+
+The MasterControl QAL Performance dataset contains 16,644 qualified leads (QALs) from 2024–2025.
+
+MasterControl sells two product families:
+
+- Qx (Quality) — established, 19.7% progression  
+- Mx (Manufacturing) — newer, 12.7% progression  
+
+The goal of this EDA is to:
+
+- Identify which **account types** convert best for Mx  
+- Identify which **job titles** convert best for Mx  
+- Compare Mx vs Qx performance across segments  
+- Find cross-sell opportunities  
+- Provide actionable recommendations  
+
+# Description of the data
+
+The dataset includes 14 fields covering:
+
+- Lead outcomes  
+- Account characteristics  
+- Contact characteristics  
+- Product information  
+- Lead source  
+- Time and identifiers  
+
+Data quality is strong across most fields except titles (29% missing).
+
+# Data import and initial checks
+
+```{r data import}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(skimr)
+library(naniar)
+library(ggplot2)
+
+qal <- read_csv("QAL Performance for MSBA.csv") %>% 
+  clean_names()
+
+str(qal)
+```
+
+# Missing data
+
+Let's start first by analyzing the missing values from the data.
+
+```{r}
+skim(qal)
+```
+
+The summary shows that roughly 40% of values are missing in:
+- acct_manufacturing_model (business model)
+- acct_primary_site_function (what the site manufactures)
+- contact_lead_title (lead title)
+To visualize the pattern of missingness, we generate a heatmap and compute missing counts per column:
+
+```{r heat map}
+vis_miss(qal)
+
+qal_missing <- qal |>
+  summarise(across(everything(), ~sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "column", values_to = "missing") |>
+  arrange(desc(missing))
+
+qal_missing
+
+qal |> 
+  summarise(
+    missing_titles = mean(is.na(contact_lead_title))
+  )
+```
+
+Key Findings
+- Contact lead titles: ~38% missing → treat “Missing” as its own category
+- next_stage__c: 483 missing → these rows are excluded when constructing the target variable
+- All other fields: <1% missing → no special handling required
+
+# Target variable construction
+
+```{r target variable}
+qal <- qal |>
+  mutate(
+    progressed = case_when(
+      next_stage_c %in% c("SQL", "SQO", "Won") ~ 1,
+      next_stage_c %in% c("Recycled", "Exclude", "Lost", "MQL", "INQ") ~ 0,
+      TRUE ~ NA_real_
+    )
+  ) |>
+  filter(!is.na(progressed))
+
+qal |>
+  count(progressed) |>
+  mutate(pct = n / sum(n))
+```
+
+# Exploratory visualizations and summary tables
+
+## Overall lead outcomes
+
+```{r}
+qal |>
+  count(progressed) |>
+  mutate(pct = n / sum(n)) |>
+  ggplot(aes(x = factor(progressed), y = n, fill = factor(progressed))) +
+  geom_col() +
+  theme_minimal()
+```
+
+## Product comparison (Qx vs Mx)
+
+```{r}
+product_summary <- qal |>
+  group_by(solution_rollup) |>
+  summarise(
+    leads = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+product_summary
+```
+
+## Account-level EDA
+
+### Industry
+
+```{r}
+industry_summary <- qal |>
+  group_by(acct_target_industry, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+industry_summary
+```
+
+### Manufacturing model
+
+```{r}
+manufacturing_summary <- qal |>
+  group_by(acct_manufacturing_model, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n))
+
+manufacturing_summary
+```
+
+### Primary site function
+
+```{r}
+site_function_summary <- qal |>
+  group_by(acct_primary_site_function, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n))
+
+site_function_summary
+```
+
+### Company size
+
+```{r}
+size_summary <- qal |>
+  group_by(acct_tier_rollup, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+size_summary
+```
+
+### Territory
+
+```{r}
+territory_summary <- qal |>
+  group_by(acct_territory_rollup, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+territory_summary
+```
+
+## Title-level EDA
+
+### Extract seniority and function keywords
+
+```{r}
+qal <- qal |>
+  mutate(
+    title_lower = tolower(contact_lead_title),
+    has_quality = str_detect(title_lower, "quality"),
+    has_ops = str_detect(title_lower, "operat|manufactur"),
+    has_reg = str_detect(title_lower, "regulat"),
+    seniority = case_when(
+      str_detect(title_lower, "chief|ceo|cfo|coo|cio|cto") ~ "C-Level",
+      str_detect(title_lower, "vp|vice") ~ "VP",
+      str_detect(title_lower, "director") ~ "Director",
+      str_detect(title_lower, "manager") ~ "Manager",
+      is.na(title_lower) ~ "Missing",
+      TRUE ~ "Other"
+    )
+  )
+```
+
+### Conversion by seniority
+
+```{r}
+seniority_summary <- qal |>
+  group_by(seniority, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+seniority_summary
+```
+
+### Conversion by functional flags
+
+```{r}
+function_summary <- qal |>
+  group_by(has_quality, has_ops, has_reg, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+function_summary
+```
+
+## Combined account + title patterns
+
+```{r}
+combined_summary <- qal |>
+  group_by(acct_manufacturing_model, seniority, has_ops, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  ) |>
+  arrange(desc(progression_rate))
+
+combined_summary
+```
+
+## Time-based patterns
+
+```{r}
+time_summary <- qal |>
+  mutate(
+    year = year(qal_cohort_date),
+    month = floor_date(qal_cohort_date, "month")
+  ) |>
+  group_by(year, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+time_summary
+```
+
+## Lead source analysis
+
+```{r}
+priority_summary <- qal |>
+  group_by(priority, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+priority_summary
+
+channel_summary <- qal |>
+  group_by(last_tactic_campaign_channel, solution_rollup) |>
+  summarise(
+    n = n(),
+    progression_rate = mean(progressed),
+    .groups = "drop"
+  )
+
+channel_summary
+```
+
+# Results section
+
+Summaries we can include:
+
+- Best account types for Mx  
+- Best titles for Mx  
+- Cross-sell opportunities  
+- Expected impact  
+- Actionable recommendations  
+
+# Group member contribution
+
+Describe each member’s contributions.
