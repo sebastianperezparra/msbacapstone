@@ -5,53 +5,82 @@ This project was completed as part of a Master of Science in Business Analytics 
 
 The objective was to apply data analytics to a real-world business problem by analyzing sales and lead data to improve prioritization, conversion rates, and overall sales efficiency.
 
-## Business Problem  
+---
+
+## Business Problem & Project Objective  
 MasterControl generates a high volume of qualified account leads (QALs) across its product lines. While some segments show strong conversion performance, others lag behind.  
 
-This creates a key challenge:  
+The main objective of this project was to develop a data-driven approach to better understand lead behavior and improve lead prioritization to increase conversion efficiency and overall pipeline performance.
 
-**How can sales teams better identify and prioritize leads most likely to convert in order to improve overall pipeline performance and efficiency?**
+**Key question:**  
+How can sales teams better identify and prioritize leads most likely to convert?
 
-Without a structured, data-driven approach, sales resources may be allocated inefficiently across low-probability opportunities.
+---
 
-## Approach  
-Our analysis followed a structured workflow:
+## Solution Approach  
+We addressed the business problem through a structured analytics workflow:
 
 ### 1. Exploratory Data Analysis (EDA)  
 - Evaluated lead behavior and conversion patterns across key segments  
-- Analyzed differences by industry, account attributes, and contact roles  
+- Identified differences by industry, account attributes, and contact roles  
 - Assessed data quality and missing values  
 
 ### 2. Predictive Modeling  
 - Built classification models to estimate likelihood of lead conversion  
-- Used logistic regression and feature selection techniques for interpretability  
-- Evaluated model performance using standard classification metrics  
+- Applied logistic regression and feature selection for interpretability  
+- Evaluated model performance using standard metrics  
 
-### 3. Insights & Interpretation  
+### 3. Insights & Recommendations  
 - Identified key drivers of conversion likelihood  
-- Analyzed differences across segments and attributes  
-- Translated model outputs into business-focused insights  
+- Compared performance across segments  
+- Translated model outputs into actionable business insights for prioritization  
 
-## Key Insights  
-- Conversion rates vary significantly across different lead segments  
-- Some leads consistently show higher likelihood of progressing through the funnel  
-- A scoring-based approach is more effective than binary classification for prioritization  
-- Segment-level differences can be leveraged to improve targeting efficiency  
-- Data-driven prioritization can significantly improve sales focus  
+---
+
+## Individual Contribution  
+- Built and maintained individual analysis notebooks (EDA and modeling work)  
+- Performed data cleaning, preprocessing, and feature exploration  
+- Developed and evaluated predictive models  
+- Created visualizations to communicate insights clearly  
+- Supported interpretation of results for business recommendations  
+
+---
 
 ## Business Value  
-This project enables MasterControl to:  
-- Better prioritize high-value leads  
-- Improve sales efficiency and resource allocation  
-- Increase conversion rates across underperforming segments  
-- Support more data-driven decision-making in the sales process  
-- Move toward a structured lead scoring framework  
+This solution provides MasterControl with a more structured and data-driven approach to lead prioritization by:
+
+- Improving identification of high-probability leads  
+- Increasing sales team efficiency and focus  
+- Enhancing conversion rates in underperforming segments  
+- Supporting data-driven decision-making in the sales process  
+- Enabling a shift toward scalable lead scoring strategies  
+
+---
+
+## Challenges Encountered  
+- Working with messy or incomplete data requiring careful cleaning and validation  
+- Balancing model complexity with interpretability for business use  
+- Translating technical model outputs into clear business recommendations  
+- Ensuring consistency across exploratory analysis and modeling steps  
+
+---
+
+## Key Learnings  
+- Strengthened skills in end-to-end analytics workflow development  
+- Improved ability to apply machine learning techniques to business problems  
+- Gained experience translating data insights into business recommendations  
+- Enhanced communication of technical results to non-technical audiences  
+- Developed stronger understanding of real-world sales and lead analytics  
+
+---
 
 ## Deliverables  
-- Individual exploratory analysis notebooks  
+- Individual exploratory data analysis notebooks  
 - Predictive modeling notebooks  
 - Final capstone presentation (PDF)  
 - Supporting visualizations and analysis outputs  
+
+---
 
 ## Tools & Methods  
 - Python  
@@ -62,10 +91,14 @@ This project enables MasterControl to:
 - Seaborn  
 - Jupyter Notebooks  
 
+---
+
 ## Data Confidentiality  
 The data used in this project were provided for academic purposes in collaboration with MasterControl and are not included in this repository.
 
+---
+
 ## Team  
-- Miles McCunniff
+- Miles McCunniff  
 - Sebastian Perez Parra  
 - Jeffrey Zhang  
